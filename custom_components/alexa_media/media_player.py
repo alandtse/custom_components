@@ -23,6 +23,7 @@ from homeassistant.components.media_player.const import (
     SUPPORT_PLAY_MEDIA,
     SUPPORT_PREVIOUS_TRACK,
     SUPPORT_SELECT_SOURCE,
+    SUPPORT_SHUFFLE_SET,
     SUPPORT_STOP,
     SUPPORT_TURN_OFF,
     SUPPORT_TURN_ON,
@@ -47,7 +48,7 @@ SUPPORT_ALEXA = (SUPPORT_PAUSE | SUPPORT_PREVIOUS_TRACK |
                  SUPPORT_VOLUME_SET | SUPPORT_PLAY |
                  SUPPORT_PLAY_MEDIA | SUPPORT_TURN_OFF | SUPPORT_TURN_ON |
                  SUPPORT_VOLUME_MUTE | SUPPORT_PAUSE |
-                 SUPPORT_SELECT_SOURCE)
+                 SUPPORT_SELECT_SOURCE | SUPPORT_SHUFFLE_SET)
 _LOGGER = logging.getLogger(__name__)
 
 DEPENDENCIES = [ALEXA_DOMAIN]
@@ -132,6 +133,7 @@ class AlexaClient(MediaPlayerDevice):
         self._previous_volume = None
         self._source = None
         self._source_list = []
+        self._shuffle = None
         # Last Device
         self._last_called = None
         # Polling state
@@ -309,6 +311,11 @@ class AlexaClient(MediaPlayerDevice):
                                             None and 'mediaLength' in
                                             self._session['progress'])
                                         else None)
+            if self._session['transport'] is not None:
+                self._shuffle = (self._session['transport']
+                                 ['shuffle'] == "SELECTED"
+                                 if ('shuffle' in self._session['transport'])
+                                 else None)
 
     @property
     def source(self):
@@ -499,6 +506,21 @@ class AlexaClient(MediaPlayerDevice):
     def device_family(self):
         """Return the make of the device (ex. Echo, Other)."""
         return self._device_family
+
+    def set_shuffle(self, shuffle):
+        """Enable/disable shuffle mode."""
+        self.alexa_api.shuffle(shuffle)
+        self.shuffle_state = shuffle
+
+    @property
+    def shuffle_state(self):
+        """Return the Shuffle state."""
+        return self._shuffle
+
+    @shuffle_state.setter
+    def shuffle_state(self, state):
+        """Set the Shuffle state."""
+        self._shuffle = state
 
     @property
     def supported_features(self):
