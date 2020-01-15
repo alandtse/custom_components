@@ -438,6 +438,7 @@ async def setup_alexa(hass, config_entry, login_obj):
         dnd = {}
         raw_notifications = {}
         try:
+            if new_devices:
             auth_info = await AlexaAPI.get_authentication(login_obj)
             devices = await AlexaAPI.get_devices(login_obj)
             bluetooth = await AlexaAPI.get_bluetooth(login_obj)
