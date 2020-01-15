@@ -10,6 +10,7 @@ https://community.home-assistant.io/t/echo-devices-alexa-as-media-player-testers
 from datetime import timedelta
 import logging
 from typing import List, Optional, Text
+import asyncio
 
 from alexapy import AlexapyLoginError, WebsocketEchoClient, hide_email, hide_serial
 from homeassistant import util
@@ -178,7 +179,7 @@ async def async_setup_entry(hass, config_entry):
             "auth_info": None,
             "configurator": [],
         },
-        )
+    )
     login = hass.data[DATA_ALEXAMEDIA]["accounts"][email].get(
         "login_obj",
         AlexaLogin(url, email, password, hass.config.path, account.get(CONF_DEBUG)),
@@ -439,7 +440,7 @@ async def setup_alexa(hass, config_entry, login_obj):
         raw_notifications = {}
         try:
             if new_devices:
-            auth_info = await AlexaAPI.get_authentication(login_obj)
+                auth_info = await AlexaAPI.get_authentication(login_obj)
             devices = await AlexaAPI.get_devices(login_obj)
             bluetooth = await AlexaAPI.get_bluetooth(login_obj)
             preferences = await AlexaAPI.get_device_preferences(login_obj)
@@ -546,6 +547,22 @@ async def setup_alexa(hass, config_entry, login_obj):
 
             if device["serialNumber"] not in existing_serials:
                 new_alexa_clients.append(device["accountName"])
+            else:
+                media_player = hass.data[DATA_ALEXAMEDIA]["accounts"][email][
+                    "entities"
+                ]["media_player"][device["serialNumber"]]
+                if (
+                    media_player.available is not None
+                    and media_player.available != device["online"]
+                ):
+                    _LOGGER.debug(
+                        "%s: %s changed online state from %s to %s; updating",
+                        hide_email(email),
+                        media_player.name,
+                        media_player.available,
+                        device["online"],
+                    )
+                    await media_player.async_update()
         _LOGGER.debug(
             "%s: Existing: %s New: %s;"
             " Filtered out by not being in include: %s "
@@ -748,6 +765,63 @@ async def setup_alexa(hass, config_entry, login_obj):
         This allows push notifications from Alexa to update last_called
         and media state.
         """
+
+        @util.Throttle(timedelta(seconds=30))
+        async def _check_offline_devices(timeout):
+            ws_activity = hass.data[DATA_ALEXAMEDIA]["accounts"][email][
+                "websocket_activity"
+            ]["serials"]
+            refreshed = hass.data[DATA_ALEXAMEDIA]["accounts"][email][
+                "websocket_activity"
+            ]["refreshed"]
+            current_time = time.time()
+            for device_serial, device_entity in hass.data[DATA_ALEXAMEDIA]["accounts"][
+                email
+            ]["entities"]["media_player"].items():
+                diff_time = current_time - ws_activity.get(
+                    device_serial, util.dt.as_timestamp(device_entity._last_update)
+                )
+                if (
+                    device_entity.available
+                    and diff_time > timeout * 2
+                    and refreshed.get(device_serial)
+                ):
+                    # refresh was attempted
+                    try:
+                        await refreshed.get(device_serial)
+                    except RuntimeError:
+                        device_entity.available = False
+                        device_entity.async_schedule_update_ha_state()
+                        refreshed.pop(device_serial)
+                        _LOGGER.debug(
+                            "%s: %s is offline; last seen %s seconds ago",
+                            hide_email(email),
+                            device_entity,
+                            round(diff_time, 2),
+                        )
+                elif (
+                    device_entity.available
+                    and diff_time > timeout
+                    and not refreshed.get(device_serial)
+                ):  # schedule refresh
+                    _LOGGER.debug(
+                        "%s: Checking if %s offline; last seen %s seconds ago",
+                        hide_email(email),
+                        device_entity,
+                        round(diff_time, 2),
+                    )
+                    refreshed[device_serial] = device_entity.async_set_volume_level(
+                        device_entity.volume_level
+                        if device_entity.volume_level
+                        else 0.1
+                    )
+            if refreshed.values():
+                try:
+                    result = await asyncio.gather(*refreshed.values())
+                    _LOGGER.debug("Result: %s", result)
+                except RuntimeError:
+                    pass
+
         import time
 
         command = (
@@ -909,6 +983,7 @@ async def setup_alexa(hass, config_entry, login_obj):
                 await update_devices(  # pylint: disable=unexpected-keyword-arg
                     login_obj, no_throttle=True
                 )
+            await _check_offline_devices(scan_interval * 10)
 
     async def ws_open_handler():
         """Handle websocket open."""
@@ -958,10 +1033,10 @@ async def setup_alexa(hass, config_entry, login_obj):
             ) = await ws_connect()
             errors += 1
             delay = 5 * 2 ** errors
-            _LOGGER.debug(
-                "%s: Websocket closed; retries exceeded; polling", hide_email(email)
-            )
-            (hass.data[DATA_ALEXAMEDIA]["accounts"][email]["websocket"]) = None
+        _LOGGER.debug(
+            "%s: Websocket closed; retries exceeded; polling", hide_email(email)
+        )
+        (hass.data[DATA_ALEXAMEDIA]["accounts"][email]["websocket"]) = None
         await update_devices(  # pylint: disable=unexpected-keyword-arg
             login_obj, no_throttle=True
         )
