@@ -447,6 +447,13 @@ async def setup_alexa(hass, config_entry, login_obj):
                 .get(serial)
                 .enabled
             ):
+                _LOGGER.debug(
+                    "Coordinator Refresh of %s with %s",
+                    hass.data[DATA_ALEXAMEDIA]["accounts"][email]["entities"][
+                        "media_player"
+                    ].get(serial),
+                    device,
+                )
                 await hass.data[DATA_ALEXAMEDIA]["accounts"][email]["entities"][
                     "media_player"
                 ].get(serial).refresh(device, skip_api=True)
